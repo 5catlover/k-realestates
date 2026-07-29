@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>고객관리대장</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<style>
+  html, body { margin:0; padding:0; background:#FAF7F2; }
+  * { box-sizing: border-box; }
+  @import url('https://cdnjs.cloudflare.com/ajax/libs/pretendard/1.3.9/static/pretendard.min.css');
+  body { font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+/* =========================================================
+   1) 아래 firebaseConfig 를 본인의 Firebase 프로젝트 값으로 교체하세요.
+   설정 방법은 함께 전달된 안내 문서를 참고하세요.
+   ========================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyCI48sAa3ziK6LtmM2ktK79w-YEQM4JwVI",
+  authDomain: "kej-real-estate.firebaseapp.com",
+  projectId: "kej-real-estate",
+  storageBucket: "kej-real-estate.firebasestorage.app",
+  messagingSenderId: "403949964803",
+  appId: "1:403949964803:web:03e860fca82ad8968c8836"
+};
+const CONFIG_READY = firebaseConfig.apiKey !== "YOUR_API_KEY";
+
+let db = null;
+if (CONFIG_READY) {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+}
+
+/* ---------- Theme ---------- */
+const THEME = {
+  ink: '#1C2B39', inkLight: '#28394C', paper: '#FAF7F2', card: '#FFFFFF', line: '#E4DCC9',
+  brass: '#B8873A', brassLight: '#D8AD6C', sage: '#6B8F71', sageBg: '#EAF1EA',
+  terracotta: '#C1666B', terracottaBg: '#F7E9EA', slate: '#5C6773',
+  dustyBlue: '#5B7C99', dustyBlueBg: '#E9EFF3', cream: '#F4F1EA', purple: '#8B7AA8', purpleBg: '#EFEAF3',
+};
+
+/* ---------- Helpers ---------- */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const daysUntil = (dateStr) => {
+  if (!dateStr) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const target = new Date(dateStr); target.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / (1000 * 60 * 60 * 24));
+};
+
+const ACTIVITY_TYPES = [
+  { key: '전화문의', emoji: '📞', color: THEME.dustyBlue, bg: THEME.dustyBlueBg },
+  { key: '방문', emoji: '🚶', color: THEME.sage, bg: THEME.sageBg },
+  { key: '물건안내', emoji: '👁', color: THEME.brass, bg: '#F5EBD8' },
+];
+
+const inputStyle = { border: `1px solid ${THEME.line}`, borderRadius: '6px', padding: '7px 9px', fontSize: '12px', fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' };
+const iconBtnStyle = { border: 'none', background: 'transparent', cursor: 'pointer', color: THEME.slate, padding: '4px', fontSize: '13px' };
+
+function buildEvents(data) {
+  const map = {};
+  const push = (date, ev) => { if (!date) return; if (!map[date]) map[date] = []; map[date].push(ev); };
+  data.activities.forEach(a => {
+    const meta = ACTIVITY_TYPES.find(t => t.key === a.type) || ACTIVITY_TYPES[0];
+    push(a.date, { label: `${a.type} · ${a.customerName || '고객'}`, color: meta.color, bg: meta.bg });
+    if (a.followUpDate && a.followUpDate !== a.date) {
+      push(a.followUpDate, { label: `팔로업 · ${a.customerName || '고객'}`, color: THEME.sage, bg: THEME.sageBg });
+    }
+  });
+  data.contracts.forEach(c => {
+    if (!c.endDate) return;
+    const d = daysUntil(c.endDate);
+    const urgent = d !== null && d <= 7;
+    const soon = d !== null && d <= 30;
+    push(c.endDate, {
+      label: `만기 · ${c.tenantName || '계약'}`,
+      color: urgent ? THEME.terracotta : soon ? THEME.brass : THEME.slate,
+      bg: urgent ? THEME.terracottaBg : soon ? '#F5EBD8' : THEME.cream,
+    });
+  });
+  data.cobrokers.forEach(c => { push(c.date, { label: `공동중개 · ${c.agencyName || ''}`, color: THEME.purple, bg: THEME.purpleBg }); });
+  return map;
+}
+
+/* ---------- Small UI ---------- */
+function SectionHeader({ eyebrow, title, action }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
+      <div>
+        <div style={{ fontSize: '12px', color: THEME.brass, fontWeight: 600, letterSpacing: '0.06em' }}>{eyebrow}</div>
+        <h1 style={{ fontSize: '22px', fontWeight: 800, color: THEME.ink, margin: '4px 0 0' }}>{title}</h1>
+      </div>
+      {action}
+    </div>
+  );
+}
+function AddButton({ onClick, label = '추가' }) {
+  return <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: THEME.brass, color: '#fff', fontSize: '13px', fontWeight: 600, padding: '9px 14px', borderRadius: '8px', cursor: 'pointer' }}>+ {label}</button>;
+}
+function Card({ children, style }) {
+  return <div style={{ background: THEME.card, border: `1px solid ${THEME.line}`, borderRadius: '10px', padding: '14px 16px', marginBottom: '10px', ...style }}>{children}</div>;
+}
+function SaveBtn({ onClick, children }) {
+  return <button onClick={onClick} style={{ border: 'none', background: THEME.ink, color: '#fff', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>{children}</button>;
+}
+function DelBtn({ onClick }) {
+  return <button onClick={onClick} style={iconBtnStyle}>삭제</button>;
+}
+
+/* ---------- Calendar ---------- */
+function MonthCalendar({ events, selected, onSelect }) {
+  const [cursor, setCursor] = useState(new Date());
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const first = new Date(year, month, 1);
+  const startDay = first.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const dateStr = (d) => `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const today = todayStr();
+
+  return (
+    <div style={{ background: THEME.card, border: `1px solid ${THEME.line}`, borderRadius: '12px', padding: '18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <button onClick={() => setCursor(new Date(year, month - 1, 1))} style={{ ...iconBtnStyle, fontSize: '16px' }}>‹</button>
+        <div style={{ fontWeight: 700, fontSize: '15px', color: THEME.ink }}>{year}년 {month + 1}월</div>
+        <button onClick={() => setCursor(new Date(year, month + 1, 1))} style={{ ...iconBtnStyle, fontSize: '16px' }}>›</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '4px', marginBottom: '6px' }}>
+        {['일', '월', '화', '수', '목', '금', '토'].map(w => (<div key={w} style={{ textAlign: 'center', fontSize: '11px', color: THEME.slate, fontWeight: 600 }}>{w}</div>))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '4px' }}>
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} />;
+          const ds = dateStr(d);
+          const evs = events[ds] || [];
+          const isToday = ds === today;
+          const isSel = ds === selected;
+          return (
+            <button key={i} onClick={() => onSelect(ds)} style={{
+              minHeight: '58px', border: isSel ? `2px solid ${THEME.brass}` : `1px solid ${THEME.line}`,
+              borderRadius: '8px', background: isToday ? THEME.cream : THEME.card, padding: '4px',
+              cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px'
+            }}>
+              <span style={{ fontSize: '12px', fontWeight: isToday ? 700 : 500, color: isToday ? THEME.brass : THEME.ink }}>{d}</span>
+              {evs.slice(0, 2).map((e, idx) => (<span key={idx} style={{ fontSize: '9px', color: e.color, background: e.bg, borderRadius: '4px', padding: '1px 4px', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.label}</span>))}
+              {evs.length > 2 && <span style={{ fontSize: '9px', color: THEME.slate }}>+{evs.length - 2}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Dashboard ---------- */
+function Dashboard({ data, addItem }) {
+  const events = useMemo(() => buildEvents(data), [data]);
+  const [selected, setSelected] = useState(todayStr());
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quick, setQuick] = useState({ type: '전화문의', customerName: '', phone: '', content: '' });
+
+  const upcomingExpiring = data.contracts.map(c => ({ ...c, d: daysUntil(c.endDate) })).filter(c => c.d !== null && c.d >= 0 && c.d <= 30).sort((a, b) => a.d - b.d);
+  const todayEvents = events[selected] || [];
+
+  const submitQuick = () => {
+    if (!quick.customerName) return;
+    addItem('activities', { type: quick.type, date: selected, customerName: quick.customerName, phone: quick.phone, content: quick.content, followUpDate: '' });
+    setQuick({ type: '전화문의', customerName: '', phone: '', content: '' });
+    setQuickOpen(false);
+  };
+
+  return (
+    <div>
+      <SectionHeader eyebrow="오늘의 데스크" title="대시보드" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '20px' }}>
+        <MonthCalendar events={events} selected={selected} onSelect={setSelected} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ background: THEME.card, border: `1px solid ${THEME.line}`, borderRadius: '12px', padding: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+              <span>⚠</span><span style={{ fontWeight: 700, fontSize: '13px', color: THEME.ink }}>만기 임박 계약 ({upcomingExpiring.length})</span>
+            </div>
+            {upcomingExpiring.length === 0 && <div style={{ fontSize: '12px', color: THEME.slate }}>30일 내 만기 예정 계약이 없습니다.</div>}
+            {upcomingExpiring.slice(0, 5).map(c => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: `1px solid ${THEME.line}`, fontSize: '12px' }}>
+                <span style={{ color: THEME.ink }}>{c.tenantName || '-'}</span>
+                <span style={{ color: c.d <= 7 ? THEME.terracotta : THEME.brass, fontWeight: 600 }}>D-{c.d}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: THEME.card, border: `1px solid ${THEME.line}`, borderRadius: '12px', padding: '16px', flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <span style={{ fontWeight: 700, fontSize: '13px', color: THEME.ink }}>{selected} 일정</span>
+              <button onClick={() => setQuickOpen(v => !v)} style={{ border: 'none', background: THEME.brass, color: '#fff', fontSize: '11px', padding: '5px 8px', borderRadius: '6px', cursor: 'pointer' }}>+ 활동 추가</button>
+            </div>
+            {todayEvents.length === 0 && !quickOpen && <div style={{ fontSize: '12px', color: THEME.slate }}>등록된 일정이 없습니다.</div>}
+            {todayEvents.map((e, idx) => (<div key={idx} style={{ fontSize: '12px', color: e.color, background: e.bg, borderRadius: '6px', padding: '6px 8px', marginBottom: '6px' }}>{e.label}</div>))}
+            {quickOpen && (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px dashed ${THEME.line}`, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <select value={quick.type} onChange={e => setQuick({ ...quick, type: e.target.value })} style={inputStyle}>{ACTIVITY_TYPES.map(t => <option key={t.key} value={t.key}>{t.key}</option>)}</select>
+                <input placeholder="고객명" value={quick.customerName} onChange={e => setQuick({ ...quick, customerName: e.target.value })} style={inputStyle} />
+                <input placeholder="연락처" value={quick.phone} onChange={e => setQuick({ ...quick, phone: e.target.value })} style={inputStyle} />
+                <textarea placeholder="내용" value={quick.content} onChange={e => setQuick({ ...quick, content: e.target.value })} style={{ ...inputStyle, minHeight: '50px' }} />
+                <SaveBtn onClick={submitQuick}>저장</SaveBtn>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Customers ---------- */
+function CustomersTab({ data, addItem, deleteItem }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', phone: '', type: '임차인', memo: '' });
+  const [q, setQ] = useState('');
+  const submit = () => { if (!form.name) return; addItem('customers', { ...form, createdAt: todayStr() }); setForm({ name: '', phone: '', type: '임차인', memo: '' }); setOpen(false); };
+  const filtered = data.customers.filter(c => c.name.includes(q) || (c.phone || '').includes(q));
+  return (
+    <div>
+      <SectionHeader eyebrow="CUSTOMER LEDGER" title="고객" action={<AddButton onClick={() => setOpen(v => !v)} label="고객 등록" />} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+        <span>🔍</span><input placeholder="이름 또는 연락처 검색" value={q} onChange={e => setQ(e.target.value)} style={{ ...inputStyle, maxWidth: '260px' }} />
+      </div>
+      {open && (
+        <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="이름" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+            <input placeholder="연락처" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+            <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inputStyle}>{['임차인', '임대인', '매수인', '매도인', '기타'].map(t => <option key={t}>{t}</option>)}</select>
+          </div>
+          <textarea placeholder="메모" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} style={{ ...inputStyle, minHeight: '50px', marginBottom: '8px' }} />
+          <SaveBtn onClick={submit}>저장</SaveBtn>
+        </Card>
+      )}
+      {filtered.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 고객이 없습니다.</div>}
+      {filtered.map(c => {
+        const relatedActivities = data.activities.filter(a => a.customerName === c.name).length;
+        return (
+          <Card key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{c.name}<span style={{ fontSize: '11px', color: THEME.dustyBlue, background: THEME.dustyBlueBg, borderRadius: '4px', padding: '2px 6px', marginLeft: '8px' }}>{c.type}</span></div>
+              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '4px' }}>{c.phone || '연락처 없음'} · 활동 {relatedActivities}건</div>
+              {c.memo && <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '4px' }}>{c.memo}</div>}
+            </div>
+            <DelBtn onClick={() => deleteItem('customers', c.id)} />
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Activities ---------- */
+function ActivitiesTab({ data, addItem, deleteItem }) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('전체');
+  const [form, setForm] = useState({ type: '전화문의', date: todayStr(), customerName: '', phone: '', content: '', followUpDate: '' });
+  const submit = () => { if (!form.customerName) return; addItem('activities', { ...form }); setForm({ type: '전화문의', date: todayStr(), customerName: '', phone: '', content: '', followUpDate: '' }); setOpen(false); };
+  const list = [...data.activities].sort((a, b) => b.date.localeCompare(a.date)).filter(a => filter === '전체' || a.type === filter);
+  return (
+    <div>
+      <SectionHeader eyebrow="INQUIRY & VISIT LOG" title="활동 (전화문의 · 방문 · 물건안내)" action={<AddButton onClick={() => setOpen(v => !v)} label="활동 기록" />} />
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        {['전체', ...ACTIVITY_TYPES.map(t => t.key)].map(f => (<button key={f} onClick={() => setFilter(f)} style={{ border: `1px solid ${THEME.line}`, background: filter === f ? THEME.ink : THEME.card, color: filter === f ? '#fff' : THEME.ink, fontSize: '12px', padding: '6px 12px', borderRadius: '999px', cursor: 'pointer' }}>{f}</button>))}
+      </div>
+      {open && (
+        <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inputStyle}>{ACTIVITY_TYPES.map(t => <option key={t.key}>{t.key}</option>)}</select>
+            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} style={inputStyle} />
+            <input placeholder="고객명" value={form.customerName} onChange={e => setForm({ ...form, customerName: e.target.value })} style={inputStyle} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="연락처" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+            <div><input type="date" value={form.followUpDate} onChange={e => setForm({ ...form, followUpDate: e.target.value })} style={inputStyle} /><div style={{ fontSize: '10px', color: THEME.slate, marginTop: '2px' }}>다음 팔로업 일정(선택)</div></div>
+          </div>
+          <textarea placeholder="문의/상담 내용" value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} style={{ ...inputStyle, minHeight: '50px', marginBottom: '8px' }} />
+          <SaveBtn onClick={submit}>저장 (캘린더에 자동 등록)</SaveBtn>
+        </Card>
+      )}
+      {list.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>기록된 활동이 없습니다.</div>}
+      {list.map(a => {
+        const meta = ACTIVITY_TYPES.find(t => t.key === a.type) || ACTIVITY_TYPES[0];
+        return (
+          <Card key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', color: meta.color, background: meta.bg, borderRadius: '4px', padding: '2px 6px', fontWeight: 600 }}>{a.type}</span>
+                <span style={{ fontWeight: 700, fontSize: '13px', color: THEME.ink }}>{a.customerName}</span>
+                <span style={{ fontSize: '12px', color: THEME.slate }}>{a.date}</span>
+              </div>
+              {a.content && <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '6px' }}>{a.content}</div>}
+              {a.followUpDate && <div style={{ fontSize: '11px', color: THEME.sage, marginTop: '4px' }}>다음 팔로업: {a.followUpDate}</div>}
+            </div>
+            <DelBtn onClick={() => deleteItem('activities', a.id)} />
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Properties ---------- */
+function PropertiesTab({ data, addItem, updateItem, deleteItem }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ address: '', dealType: '전세', price: '', size: '', status: '공개중', ownerName: '', ownerPhone: '', memo: '' });
+  const submit = () => { if (!form.address) return; addItem('properties', { ...form, registeredDate: todayStr() }); setForm({ address: '', dealType: '전세', price: '', size: '', status: '공개중', ownerName: '', ownerPhone: '', memo: '' }); setOpen(false); };
+  const statusColor = (s) => s === '공개중' ? { c: THEME.sage, b: THEME.sageBg } : s === '계약완료' ? { c: THEME.slate, b: THEME.cream } : { c: THEME.brass, b: '#F5EBD8' };
+  return (
+    <div>
+      <SectionHeader eyebrow="PROPERTY INTAKE" title="물건 (매물 접수)" action={<AddButton onClick={() => setOpen(v => !v)} label="물건 접수" />} />
+      {open && (
+        <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="주소" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} style={inputStyle} />
+            <select value={form.dealType} onChange={e => setForm({ ...form, dealType: e.target.value })} style={inputStyle}>{['매매', '전세', '월세'].map(t => <option key={t}>{t}</option>)}</select>
+            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={inputStyle}>{['공개중', '계약완료', '보류'].map(t => <option key={t}>{t}</option>)}</select>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="가격" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} style={inputStyle} />
+            <input placeholder="면적" value={form.size} onChange={e => setForm({ ...form, size: e.target.value })} style={inputStyle} />
+            <input placeholder="소유주명" value={form.ownerName} onChange={e => setForm({ ...form, ownerName: e.target.value })} style={inputStyle} />
+            <input placeholder="소유주 연락처" value={form.ownerPhone} onChange={e => setForm({ ...form, ownerPhone: e.target.value })} style={inputStyle} />
+          </div>
+          <textarea placeholder="메모" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} style={{ ...inputStyle, minHeight: '50px', marginBottom: '8px' }} />
+          <SaveBtn onClick={submit}>저장</SaveBtn>
+        </Card>
+      )}
+      {data.properties.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 물건이 없습니다.</div>}
+      {[...data.properties].reverse().map(p => {
+        const sc = statusColor(p.status);
+        return (
+          <Card key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span>📍</span><span style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{p.address}</span>
+                <span style={{ fontSize: '11px', color: sc.c, background: sc.b, borderRadius: '4px', padding: '2px 6px' }}>{p.status}</span>
+              </div>
+              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '6px' }}>{p.dealType} · {p.price || '가격 미정'} · {p.size || '-'}</div>
+              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '2px' }}>소유주: {p.ownerName || '-'} {p.ownerPhone && `(${p.ownerPhone})`}</div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <select value={p.status} onChange={e => updateItem('properties', p.id, { status: e.target.value })} style={{ ...inputStyle, fontSize: '11px', padding: '4px 6px', width: 'auto' }}>{['공개중', '계약완료', '보류'].map(t => <option key={t}>{t}</option>)}</select>
+              <DelBtn onClick={() => deleteItem('properties', p.id)} />
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Contracts ---------- */
+function ContractsTab({ data, addItem, deleteItem }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ propertyId: '', tenantName: '', tenantPhone: '', startDate: '', endDate: '', deposit: '', rent: '', memo: '' });
+  const submit = () => { if (!form.tenantName || !form.endDate) return; addItem('contracts', { ...form }); setForm({ propertyId: '', tenantName: '', tenantPhone: '', startDate: '', endDate: '', deposit: '', rent: '', memo: '' }); setOpen(false); };
+  const list = [...data.contracts].map(c => ({ ...c, d: daysUntil(c.endDate) })).sort((a, b) => (a.d ?? 9999) - (b.d ?? 9999));
+  return (
+    <div>
+      <SectionHeader eyebrow="CONTRACT EXPIRY TRACKING" title="계약 (만기일 관리)" action={<AddButton onClick={() => setOpen(v => !v)} label="계약 등록" />} />
+      {open && (
+        <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <select value={form.propertyId} onChange={e => setForm({ ...form, propertyId: e.target.value })} style={inputStyle}><option value="">연결할 물건 선택(선택)</option>{data.properties.map(p => <option key={p.id} value={p.id}>{p.address}</option>)}</select>
+            <input placeholder="임차인/계약자명" value={form.tenantName} onChange={e => setForm({ ...form, tenantName: e.target.value })} style={inputStyle} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="연락처" value={form.tenantPhone} onChange={e => setForm({ ...form, tenantPhone: e.target.value })} style={inputStyle} />
+            <div><input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} style={inputStyle} /><div style={{ fontSize: '10px', color: THEME.slate, marginTop: '2px' }}>계약 시작일</div></div>
+            <div><input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} style={inputStyle} /><div style={{ fontSize: '10px', color: THEME.slate, marginTop: '2px' }}>만기일 (캘린더 자동등록)</div></div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="보증금" value={form.deposit} onChange={e => setForm({ ...form, deposit: e.target.value })} style={inputStyle} />
+            <input placeholder="월세(해당시)" value={form.rent} onChange={e => setForm({ ...form, rent: e.target.value })} style={inputStyle} />
+          </div>
+          <textarea placeholder="메모" value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} style={{ ...inputStyle, minHeight: '50px', marginBottom: '8px' }} />
+          <SaveBtn onClick={submit}>저장</SaveBtn>
+        </Card>
+      )}
+      {list.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 계약이 없습니다.</div>}
+      {list.map(c => {
+        const prop = data.properties.find(p => p.id === c.propertyId);
+        const urgent = c.d !== null && c.d <= 7;
+        const soon = c.d !== null && c.d <= 30 && c.d > 7;
+        return (
+          <Card key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', borderColor: urgent ? THEME.terracotta : THEME.line }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{c.tenantName}</span>
+                {prop && <span style={{ fontSize: '12px', color: THEME.slate }}>{prop.address}</span>}
+                {c.d !== null && (<span style={{ fontSize: '11px', fontWeight: 700, color: urgent ? THEME.terracotta : soon ? THEME.brass : THEME.slate, background: urgent ? THEME.terracottaBg : soon ? '#F5EBD8' : THEME.cream, borderRadius: '4px', padding: '2px 6px' }}>{c.d >= 0 ? `D-${c.d}` : `만기 ${Math.abs(c.d)}일 경과`}</span>)}
+              </div>
+              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '6px' }}>{c.startDate || '-'} ~ {c.endDate} · 보증금 {c.deposit || '-'} {c.rent && `· 월세 ${c.rent}`}</div>
+            </div>
+            <DelBtn onClick={() => deleteItem('contracts', c.id)} />
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Co-brokerage ---------- */
+function CobrokersTab({ data, addItem, updateItem, deleteItem }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ date: todayStr(), agencyName: '', agentName: '', agentPhone: '', propertyId: '', content: '', status: '진행중' });
+  const submit = () => { if (!form.agencyName) return; addItem('cobrokers', { ...form }); setForm({ date: todayStr(), agencyName: '', agentName: '', agentPhone: '', propertyId: '', content: '', status: '진행중' }); setOpen(false); };
+  return (
+    <div>
+      <SectionHeader eyebrow="CO-BROKERAGE LOG" title="공동중개 문의" action={<AddButton onClick={() => setOpen(v => !v)} label="문의 등록" />} />
+      {open && (
+        <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} style={inputStyle} />
+            <input placeholder="상대 부동산명" value={form.agencyName} onChange={e => setForm({ ...form, agencyName: e.target.value })} style={inputStyle} />
+            <input placeholder="담당자명" value={form.agentName} onChange={e => setForm({ ...form, agentName: e.target.value })} style={inputStyle} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <input placeholder="담당자 연락처" value={form.agentPhone} onChange={e => setForm({ ...form, agentPhone: e.target.value })} style={inputStyle} />
+            <select value={form.propertyId} onChange={e => setForm({ ...form, propertyId: e.target.value })} style={inputStyle}><option value="">관련 물건 선택(선택)</option>{data.properties.map(p => <option key={p.id} value={p.id}>{p.address}</option>)}</select>
+          </div>
+          <textarea placeholder="문의 내용" value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} style={{ ...inputStyle, minHeight: '50px', marginBottom: '8px' }} />
+          <SaveBtn onClick={submit}>저장</SaveBtn>
+        </Card>
+      )}
+      {data.cobrokers.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 공동중개 문의가 없습니다.</div>}
+      {[...data.cobrokers].reverse().map(c => {
+        const prop = data.properties.find(p => p.id === c.propertyId);
+        return (
+          <Card key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span>🤝</span><span style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{c.agencyName}</span>
+                <span style={{ fontSize: '12px', color: THEME.slate }}>{c.date}</span>
+              </div>
+              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '6px' }}>{c.agentName || '-'} {c.agentPhone && `(${c.agentPhone})`} {prop && `· ${prop.address}`}</div>
+              {c.content && <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '4px' }}>{c.content}</div>}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <select value={c.status} onChange={e => updateItem('cobrokers', c.id, { status: e.target.value })} style={{ ...inputStyle, fontSize: '11px', padding: '4px 6px', width: 'auto' }}>{['진행중', '완료', '보류'].map(t => <option key={t}>{t}</option>)}</select>
+              <DelBtn onClick={() => deleteItem('cobrokers', c.id)} />
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- Setup banner (Firebase 설정 전) ---------- */
+function SetupBanner() {
+  return (
+    <div style={{ minHeight: '100vh', background: THEME.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', fontFamily: "'Pretendard', sans-serif" }}>
+      <div style={{ maxWidth: '480px', background: THEME.card, border: `1px solid ${THEME.line}`, borderRadius: '12px', padding: '28px' }}>
+        <div style={{ fontSize: '12px', color: THEME.brass, fontWeight: 700, letterSpacing: '0.06em' }}>SETUP REQUIRED</div>
+        <h1 style={{ fontSize: '20px', fontWeight: 800, color: THEME.ink, margin: '6px 0 14px' }}>Firebase 연결이 필요해요</h1>
+        <p style={{ fontSize: '13px', color: THEME.slate, lineHeight: 1.6 }}>
+          이 파일 상단의 <code>firebaseConfig</code> 부분을 본인의 Firebase 프로젝트 값으로 채워야 PC와 모바일이 동기화됩니다.
+          함께 전달드린 설정 안내를 참고해 값을 채운 뒤 파일을 다시 저장하고 열어주세요.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- App ---------- */
+function App() {
+  const [data, setData] = useState({ customers: [], activities: [], properties: [], contracts: [], cobrokers: [] });
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState('dashboard');
+  const [syncError, setSyncError] = useState(null);
+
+  useEffect(() => {
+    if (!db) return;
+    const docRef = db.collection('crm').doc('main');
+    const unsub = docRef.onSnapshot(
+      (snap) => {
+        if (snap.exists && snap.data().payload) {
+          try { setData(JSON.parse(snap.data().payload)); } catch (e) {}
+        }
+        setLoaded(true);
+      },
+      (err) => { setSyncError(err.message); setLoaded(true); }
+    );
+    return () => unsub();
+  }, []);
+
+  const save = async (next) => {
+    setData(next);
+    if (!db) return;
+    try { await db.collection('crm').doc('main').set({ payload: JSON.stringify(next) }, { merge: true }); }
+    catch (e) { setSyncError(e.message); }
+  };
+  const addItem = (key, item) => save({ ...data, [key]: [...data[key], { id: uid(), ...item }] });
+  const updateItem = (key, id, patch) => save({ ...data, [key]: data[key].map(it => it.id === id ? { ...it, ...patch } : it) });
+  const deleteItem = (key, id) => save({ ...data, [key]: data[key].filter(it => it.id !== id) });
+
+  const NAV = [
+    { key: 'dashboard', label: '대시보드', emoji: '📅' },
+    { key: 'customers', label: '고객', emoji: '👥' },
+    { key: 'activities', label: '활동', emoji: '📞' },
+    { key: 'properties', label: '물건', emoji: '🏢' },
+    { key: 'contracts', label: '계약', emoji: '📝' },
+    { key: 'cobrokers', label: '공동중개', emoji: '🤝' },
+  ];
+
+  if (!CONFIG_READY) return <SetupBanner />;
+  if (!loaded) return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: THEME.slate }}>불러오는 중...</div>;
+
+  return (
+    <div style={{ minHeight: '100vh', background: THEME.paper, display: 'flex', flexWrap: 'wrap' }}>
+      {syncError && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, background: THEME.terracotta, color: '#fff', fontSize: '12px', padding: '8px 14px', zIndex: 999 }}>
+          동기화 오류: {syncError} — Firestore 보안 규칙(rules)을 확인해주세요.
+        </div>
+      )}
+      <div style={{ width: '176px', background: THEME.ink, color: THEME.cream, display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: '100vh' }}>
+        <div style={{ padding: '22px 18px 16px' }}>
+          <div style={{ fontSize: '11px', letterSpacing: '0.12em', color: THEME.brassLight, marginBottom: '2px' }}>REAL ESTATE DESK</div>
+          <div style={{ fontSize: '18px', fontWeight: 700 }}>고객관리대장</div>
+        </div>
+        <div style={{ flex: 1, padding: '8px 10px' }}>
+          {NAV.map(n => {
+            const active = tab === n.key;
+            return (
+              <button key={n.key} onClick={() => setTab(n.key)} style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '4px', borderRadius: '8px', border: 'none',
+                cursor: 'pointer', textAlign: 'left', fontSize: '14px', fontWeight: active ? 600 : 500,
+                background: active ? THEME.inkLight : 'transparent', color: active ? THEME.brassLight : THEME.cream,
+                borderLeft: active ? `3px solid ${THEME.brass}` : '3px solid transparent'
+              }}><span>{n.emoji}</span> {n.label}</button>
+            );
+          })}
+        </div>
+        <div style={{ padding: '14px 18px', fontSize: '11px', color: '#8494A3', borderTop: `1px solid ${THEME.inkLight}` }}>
+          {new Date().getFullYear()}년 {new Date().getMonth() + 1}월 {new Date().getDate()}일
+        </div>
+      </div>
+      <div style={{ flex: 1, minWidth: '320px', padding: '26px 30px' }}>
+        {tab === 'dashboard' && <Dashboard data={data} addItem={addItem} />}
+        {tab === 'customers' && <CustomersTab data={data} addItem={addItem} deleteItem={deleteItem} />}
+        {tab === 'activities' && <ActivitiesTab data={data} addItem={addItem} deleteItem={deleteItem} />}
+        {tab === 'properties' && <PropertiesTab data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} />}
+        {tab === 'contracts' && <ContractsTab data={data} addItem={addItem} deleteItem={deleteItem} />}
+        {tab === 'cobrokers' && <CobrokersTab data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} />}
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
