@@ -121,6 +121,24 @@ function SaveBtn({ onClick, children }) {
 function DelBtn({ onClick }) {
   return <button onClick={onClick} style={iconBtnStyle}>삭제</button>;
 }
+const thStyle = { textAlign: 'left', padding: '10px 12px', fontSize: '11px', color: THEME.slate, fontWeight: 700, whiteSpace: 'nowrap' };
+const tdStyle = { padding: '10px 12px', color: THEME.ink, verticalAlign: 'top' };
+function Th({ label, k, sortKey, sortDir, onClick }) {
+  const active = sortKey === k;
+  return <th onClick={() => onClick(k)} style={{ ...thStyle, cursor: 'pointer', userSelect: 'none', color: active ? THEME.brass : THEME.slate }}>{label} {active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</th>;
+}
+function useSort(initialKey, initialDir = 'asc') {
+  const [sortKey, setSortKey] = useState(initialKey);
+  const [sortDir, setSortDir] = useState(initialDir);
+  const toggleSort = (key) => { if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortKey(key); setSortDir('asc'); } };
+  const applySort = (list) => [...list].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
+    const as = (av ?? '').toString(), bs = (bv ?? '').toString();
+    return sortDir === 'asc' ? as.localeCompare(bs) : bs.localeCompare(as);
+  });
+  return { sortKey, sortDir, toggleSort, applySort };
+}
 
 /* ---------- Calendar ---------- */
 function MonthCalendar({ events, selected, onSelect }) {
@@ -232,13 +250,20 @@ function CustomersTab({ data, addItem, deleteItem }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', type: '임차인', memo: '' });
   const [q, setQ] = useState('');
+  const [typeFilter, setTypeFilter] = useState('전체');
+  const { sortKey, sortDir, toggleSort, applySort } = useSort('name');
   const submit = () => { if (!form.name) return; addItem('customers', { ...form, createdAt: todayStr() }); setForm({ name: '', phone: '', type: '임차인', memo: '' }); setOpen(false); };
-  const filtered = data.customers.filter(c => c.name.includes(q) || (c.phone || '').includes(q));
+
+  const withCounts = data.customers.map(c => ({ ...c, activityCount: data.activities.filter(a => a.customerName === c.name).length }));
+  const filtered = applySort(withCounts.filter(c => (c.name.includes(q) || (c.phone || '').includes(q)) && (typeFilter === '전체' || c.type === typeFilter)));
+
   return (
     <div>
       <SectionHeader eyebrow="CUSTOMER LEDGER" title="고객" action={<AddButton onClick={() => setOpen(v => !v)} label="고객 등록" />} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
-        <span>🔍</span><input placeholder="이름 또는 연락처 검색" value={q} onChange={e => setQ(e.target.value)} style={{ ...inputStyle, maxWidth: '260px' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        <span>🔍</span><input placeholder="이름 또는 연락처 검색" value={q} onChange={e => setQ(e.target.value)} style={{ ...inputStyle, maxWidth: '220px' }} />
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>{['전체', '임차인', '임대인', '매수인', '매도인', '기타'].map(t => <option key={t}>{t}</option>)}</select>
+        <span style={{ fontSize: '12px', color: THEME.slate, marginLeft: 'auto' }}>총 {filtered.length}명</span>
       </div>
       {open && (
         <Card>
@@ -251,20 +276,35 @@ function CustomersTab({ data, addItem, deleteItem }) {
           <SaveBtn onClick={submit}>저장</SaveBtn>
         </Card>
       )}
-      {filtered.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 고객이 없습니다.</div>}
-      {filtered.map(c => {
-        const relatedActivities = data.activities.filter(a => a.customerName === c.name).length;
-        return (
-          <Card key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{c.name}<span style={{ fontSize: '11px', color: THEME.dustyBlue, background: THEME.dustyBlueBg, borderRadius: '4px', padding: '2px 6px', marginLeft: '8px' }}>{c.type}</span></div>
-              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '4px' }}>{c.phone || '연락처 없음'} · 활동 {relatedActivities}건</div>
-              {c.memo && <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '4px' }}>{c.memo}</div>}
-            </div>
-            <DelBtn onClick={() => deleteItem('customers', c.id)} />
-          </Card>
-        );
-      })}
+      <div style={{ overflowX: 'auto', border: `1px solid ${THEME.line}`, borderRadius: '10px', background: THEME.card }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <thead>
+            <tr style={{ background: THEME.cream }}>
+              <Th label="이름" k="name" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <Th label="유형" k="type" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <th style={thStyle}>연락처</th>
+              <Th label="활동수" k="activityCount" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <th style={thStyle}>메모</th>
+              <Th label="등록일" k="createdAt" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <th style={thStyle}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (<tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: THEME.slate }}>등록된 고객이 없습니다.</td></tr>)}
+            {filtered.map(c => (
+              <tr key={c.id} style={{ borderTop: `1px solid ${THEME.line}` }}>
+                <td style={tdStyle}><b>{c.name}</b></td>
+                <td style={tdStyle}><span style={{ fontSize: '11px', color: THEME.dustyBlue, background: THEME.dustyBlueBg, borderRadius: '4px', padding: '2px 6px' }}>{c.type}</span></td>
+                <td style={tdStyle}>{c.phone || '-'}</td>
+                <td style={tdStyle}>{c.activityCount}건</td>
+                <td style={{ ...tdStyle, maxWidth: '200px' }}>{c.memo || '-'}</td>
+                <td style={tdStyle}>{c.createdAt || '-'}</td>
+                <td style={tdStyle}><DelBtn onClick={() => deleteItem('customers', c.id)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -323,11 +363,22 @@ function ActivitiesTab({ data, addItem, deleteItem }) {
 function PropertiesTab({ data, addItem, updateItem, deleteItem }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ address: '', dealType: '전세', price: '', size: '', status: '공개중', ownerName: '', ownerPhone: '', memo: '' });
+  const [dealFilter, setDealFilter] = useState('전체');
+  const [statusFilter, setStatusFilter] = useState('전체');
+  const { sortKey, sortDir, toggleSort, applySort } = useSort('registeredDate', 'desc');
   const submit = () => { if (!form.address) return; addItem('properties', { ...form, registeredDate: todayStr() }); setForm({ address: '', dealType: '전세', price: '', size: '', status: '공개중', ownerName: '', ownerPhone: '', memo: '' }); setOpen(false); };
   const statusColor = (s) => s === '공개중' ? { c: THEME.sage, b: THEME.sageBg } : s === '계약완료' ? { c: THEME.slate, b: THEME.cream } : { c: THEME.brass, b: '#F5EBD8' };
+
+  const filtered = applySort(data.properties.filter(p => (dealFilter === '전체' || p.dealType === dealFilter) && (statusFilter === '전체' || p.status === statusFilter)));
+
   return (
     <div>
       <SectionHeader eyebrow="PROPERTY INTAKE" title="물건 (매물 접수)" action={<AddButton onClick={() => setOpen(v => !v)} label="물건 접수" />} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        <select value={dealFilter} onChange={e => setDealFilter(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>{['전체', '매매', '전세', '월세'].map(t => <option key={t}>{t}</option>)}</select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>{['전체', '공개중', '계약완료', '보류'].map(t => <option key={t}>{t}</option>)}</select>
+        <span style={{ fontSize: '12px', color: THEME.slate, marginLeft: 'auto' }}>총 {filtered.length}건</span>
+      </div>
       {open && (
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -345,26 +396,44 @@ function PropertiesTab({ data, addItem, updateItem, deleteItem }) {
           <SaveBtn onClick={submit}>저장</SaveBtn>
         </Card>
       )}
-      {data.properties.length === 0 && <div style={{ fontSize: '13px', color: THEME.slate }}>등록된 물건이 없습니다.</div>}
-      {[...data.properties].reverse().map(p => {
-        const sc = statusColor(p.status);
-        return (
-          <Card key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <span>📍</span><span style={{ fontWeight: 700, fontSize: '14px', color: THEME.ink }}>{p.address}</span>
-                <span style={{ fontSize: '11px', color: sc.c, background: sc.b, borderRadius: '4px', padding: '2px 6px' }}>{p.status}</span>
-              </div>
-              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '6px' }}>{p.dealType} · {p.price || '가격 미정'} · {p.size || '-'}</div>
-              <div style={{ fontSize: '12px', color: THEME.slate, marginTop: '2px' }}>소유주: {p.ownerName || '-'} {p.ownerPhone && `(${p.ownerPhone})`}</div>
-            </div>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <select value={p.status} onChange={e => updateItem('properties', p.id, { status: e.target.value })} style={{ ...inputStyle, fontSize: '11px', padding: '4px 6px', width: 'auto' }}>{['공개중', '계약완료', '보류'].map(t => <option key={t}>{t}</option>)}</select>
-              <DelBtn onClick={() => deleteItem('properties', p.id)} />
-            </div>
-          </Card>
-        );
-      })}
+      <div style={{ overflowX: 'auto', border: `1px solid ${THEME.line}`, borderRadius: '10px', background: THEME.card }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <thead>
+            <tr style={{ background: THEME.cream }}>
+              <Th label="주소" k="address" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <Th label="거래유형" k="dealType" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <Th label="상태" k="status" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <Th label="가격" k="price" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <th style={thStyle}>면적</th>
+              <th style={thStyle}>소유주</th>
+              <Th label="등록일" k="registeredDate" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              <th style={thStyle}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (<tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: THEME.slate }}>등록된 물건이 없습니다.</td></tr>)}
+            {filtered.map(p => {
+              const sc = statusColor(p.status);
+              return (
+                <tr key={p.id} style={{ borderTop: `1px solid ${THEME.line}` }}>
+                  <td style={tdStyle}><b>📍 {p.address}</b></td>
+                  <td style={tdStyle}>{p.dealType}</td>
+                  <td style={tdStyle}>
+                    <select value={p.status} onChange={e => updateItem('properties', p.id, { status: e.target.value })} style={{ border: 'none', borderRadius: '4px', padding: '3px 6px', fontSize: '11px', color: sc.c, background: sc.b, cursor: 'pointer' }}>
+                      {['공개중', '계약완료', '보류'].map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td style={tdStyle}>{p.price || '-'}</td>
+                  <td style={tdStyle}>{p.size || '-'}</td>
+                  <td style={tdStyle}>{p.ownerName || '-'} {p.ownerPhone && `(${p.ownerPhone})`}</td>
+                  <td style={tdStyle}>{p.registeredDate || '-'}</td>
+                  <td style={tdStyle}><DelBtn onClick={() => deleteItem('properties', p.id)} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
